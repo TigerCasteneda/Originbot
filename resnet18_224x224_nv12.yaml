@@ -1,0 +1,26 @@
+model_parameters:
+  onnx_model: ./best_line_follower_model_xy.onnx
+  march: bayes-e
+  output_model_file_prefix: resnet18_224x224_nv12
+  working_dir: ./model_output
+
+input_parameters:
+  input_name: input
+  input_type_rt: nv12
+  input_space_and_range: regular
+  input_type_train: rgb
+  input_layout_train: NCHW
+  norm_type: data_mean_and_scale
+  input_shape: 1x3x224x224
+  mean_value: 123.675,116.28,103.53
+  scale_value: 0.0171248,0.017507,0.0174292
+  cal_data_dir: ./calibration_data_bgr_f32
+
+calibration_parameters:
+  preprocess_on: false
+  calibration_type: kl
+  per_channel: false
+
+compiler_parameters:
+  debug: false
+  compile_mode: latency
