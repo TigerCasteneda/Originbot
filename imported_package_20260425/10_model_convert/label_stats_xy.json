@@ -1,0 +1,26 @@
+{
+  "label_mean": [
+    694.8787096774194,
+    425.5025806451613
+  ],
+  "label_std": [
+    547.1466903605726,
+    151.2986375856564
+  ],
+  "image_size": 224,
+  "imagenet_mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "imagenet_std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "train_count": 3100,
+  "val_count": 775,
+  "seed": 42,
+  "dataset_dir": "/home/ubuntu/10_model_convert/merged_training_data",
+  "output_pth": "/home/ubuntu/best_line_follower_model_xy.pth"
+}

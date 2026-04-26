@@ -1,0 +1,32 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "# OriginBot / YOLO Teaching Notebooks\n",
+        "\n",
+        "这个目录包含 3 个教学 notebook：\n",
+        "\n",
+        "1. `01_yolo_train_workflow.ipynb`：YOLO11 训练\n",
+        "2. `02_resnet_bin_convert_workflow.ipynb`：ResNet/line follower 模型转 bin\n",
+        "3. `03_yolo_bin_convert_workflow.ipynb`：YOLO ONNX 模型转 bin\n",
+        "\n",
+        "建议从 01 开始，再根据模型类型进入 02 或 03。\n"
+      ]
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "display_name": "Python 3 (ipykernel)",
+      "language": "python",
+      "name": "python3"
+    },
+    "language_info": {
+      "name": "python",
+      "version": "3.10"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}

@@ -1,0 +1,34 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "# OriginBot / YOLO Teaching Notebooks\n",
+        "\n",
+        "这个目录包含 4 个教学 notebook：\n",
+        "\n",
+        "1. `01_yolo_train_workflow.ipynb`：YOLO11 训练\n",
+        "2. `02_resnet_bin_convert_workflow.ipynb`：ResNet/line follower 模型转 bin（已有 ONNX / 纯转换）\n",
+        "3. `03_yolo_bin_convert_workflow.ipynb`：YOLO ONNX 模型转 bin\n",
+        "4. `04_resnet_train_and_convert_workflow.ipynb`：ResNet18 XY 回归训练 + ONNX 导出 + Horizon bin 转换\n",
+        "\n",
+        "如果你要从零开始训练当前的 line follower ResNet，请直接使用 04。\n",
+        "如果你手上已经有 `.pth` 或 `.onnx`，继续用 02 会更快。\n"
+      ]
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "display_name": "Python 3 (ipykernel)",
+      "language": "python",
+      "name": "python3"
+    },
+    "language_info": {
+      "name": "python",
+      "version": "3.10"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}

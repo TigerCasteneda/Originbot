@@ -1,0 +1,186 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "# YOLO ONNX To Horizon Bin Workflow\n",
+        "\n",
+        "这个 notebook 用于把 YOLO 导出的 `best.onnx` 转成 Horizon X5 的 `bin`。\n",
+        "\n",
+        "默认目录按你们教学流程设计：\n",
+        "- `OE_ROOT / yolo11/` 下放 `best.onnx`\n",
+        "- `OE_ROOT / yolo11/` 下放 `generate_calibration_data.py`\n",
+        "- `OE_ROOT / yolo11/` 下放 `yolo11_detect_bayese_640x640_nv12.yaml`\n",
+        "- `OE_ROOT / yolo11/JPEGImages/` 下放校准图片\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "execution_count": null,
+      "outputs": [],
+      "source": [
+        "from pathlib import Path\n",
+        "import subprocess\n",
+        "import shlex\n",
+        "\n",
+        "OE_ROOT = Path('/data/horizon/horizon_x5_open_explorer_v1.2.8-py310_20240926')\n",
+        "WORKDIR = OE_ROOT / 'yolo11'\n",
+        "ONNX_FILE = 'best.onnx'\n",
+        "CONFIG_FILE = 'yolo11_detect_bayese_640x640_nv12.yaml'\n",
+        "GEN_CAL_SCRIPT = 'generate_calibration_data.py'\n",
+        "JPEG_DIR = WORKDIR / 'JPEGImages'\n",
+        "DOCKER_IMAGE = 'openexplorer/ai_toolchain_ubuntu_20_x5_cpu:v1.2.8-py310'\n",
+        "DATASET_MOUNT = '/data'\n",
+        "MARCH = 'bayes-e'\n",
+        "\n",
+        "print('WORKDIR =', WORKDIR)\n",
+        "\n",
+        "\n",
+        "def run(cmd: str):\n",
+        "    print(f'\\n$ {cmd}\\n')\n",
+        "    completed = subprocess.run(cmd, shell=True, executable='/bin/bash', text=True, capture_output=True)\n",
+        "    if completed.stdout:\n",
+        "        print(completed.stdout)\n",
+        "    if completed.stderr:\n",
+        "        print(completed.stderr)\n",
+        "    if completed.returncode != 0:\n",
+        "        raise RuntimeError(f'Command failed with exit code {completed.returncode}')\n",
+        "    return completed\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 1. 检查输入\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "execution_count": null,
+      "outputs": [],
+      "source": [
+        "assert OE_ROOT.exists(), f'OE_ROOT not found: {OE_ROOT}'\n",
+        "assert WORKDIR.exists(), f'WORKDIR not found: {WORKDIR}'\n",
+        "assert (WORKDIR / ONNX_FILE).exists(), f'ONNX not found: {WORKDIR / ONNX_FILE}'\n",
+        "assert (WORKDIR / CONFIG_FILE).exists(), f'Config not found: {WORKDIR / CONFIG_FILE}'\n",
+        "assert (WORKDIR / GEN_CAL_SCRIPT).exists(), f'Calibration script not found: {WORKDIR / GEN_CAL_SCRIPT}'\n",
+        "assert JPEG_DIR.exists(), f'JPEGImages not found: {JPEG_DIR}'\n",
+        "print('JPEG count =', len(list(JPEG_DIR.glob('*.jpg'))))\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 2. 生成校准数据\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "execution_count": null,
+      "outputs": [],
+      "source": [
+        "run(f'cd {shlex.quote(str(WORKDIR))} && python3 {GEN_CAL_SCRIPT} --src JPEGImages/')\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 3. checker\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "execution_count": null,
+      "outputs": [],
+      "source": [
+        "cmd = f\"sudo docker run --rm -v {OE_ROOT}:/open_explorer -v {DATASET_MOUNT}:/data/horizon_x5/data {DOCKER_IMAGE} bash -lc 'cd /open_explorer/yolo11 && hb_mapper checker --model-type onnx --march {MARCH} --model ./{ONNX_FILE}'\"\n",
+        "run(cmd)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 4. 生成 bin\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "execution_count": null,
+      "outputs": [],
+      "source": [
+        "cmd = f\"sudo docker run --rm -v {OE_ROOT}:/open_explorer -v {DATASET_MOUNT}:/data/horizon_x5/data {DOCKER_IMAGE} bash -lc 'cd /open_explorer/yolo11 && hb_mapper makertbin --model-type onnx --config {CONFIG_FILE}'\"\n",
+        "run(cmd)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 5. 查看 bin 产物\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "execution_count": null,
+      "outputs": [],
+      "source": [
+        "output_dir = WORKDIR / 'model_output'\n",
+        "assert output_dir.exists(), f'model_output not found: {output_dir}'\n",
+        "for p in sorted(output_dir.iterdir()):\n",
+        "    print(' -', p.name, f'({p.stat().st_size / 1024 / 1024:.2f} MB)')\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 6. 可选：性能检查和模型优化\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "execution_count": null,
+      "outputs": [],
+      "source": [
+        "# 先在上一格确认生成的 bin 文件名，再修改下面两个变量\n",
+        "BIN_NAME = 'yolo11n_detect_bayese_640x640_nv12.bin'\n",
+        "MODIFIED_BIN = 'yolo11n_detect_bayese_640x640_nv12_modified.bin'\n",
+        "\n",
+        "print('示例命令：')\n",
+        "print(f\"hb_perf {BIN_NAME}\")\n",
+        "print(\n",
+        "    'hb_model_modifier ' + BIN_NAME +\n",
+        "    ' -r /model.23/cv2.0/cv2.0.2/Conv_output_0_HzDequantize' +\n",
+        "    ' -r /model.23/cv2.1/cv2.1.2/Conv_output_0_HzDequantize' +\n",
+        "    ' -r /model.23/cv2.2/cv2.2.2/Conv_output_0_HzDequantize'\n",
+        ")\n",
+        "print(f\"hb_perf {MODIFIED_BIN}\")\n"
+      ]
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "display_name": "Python 3 (ipykernel)",
+      "language": "python",
+      "name": "python3"
+    },
+    "language_info": {
+      "name": "python",
+      "version": "3.10"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}

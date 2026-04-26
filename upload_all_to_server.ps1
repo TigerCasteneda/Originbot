@@ -1,8 +1,8 @@
 param(
     [string]$HostName = "hz-4.matpool.com",
-    [int]$Port = 26067,
+    [int]$Port = 28085,
     [string]$User = "root",
-    [string]$RemoteDir = "/root/originbot",
+    [string]$RemoteDir = "/root/lym_ws",
     [switch]$SkipDataset0424,
     [switch]$KeepBundle
 )
@@ -28,17 +28,15 @@ if (-not $repoRoot) {
 Set-Location $repoRoot
 
 $items = @(
-    "originbot_train.py",
-    "originbot_onnx.py",
     "prepare_horizon_mapper.py",
     "horizon_preprocess.py",
     "run_horizon_convert.sh",
+    "setup_jupyter_autostart.sh",
     "02_preprocess.sh",
     "03_build.sh",
     "resnet18_224x224_nv12.yaml",
     "01 train.ipynb",
-    "02 model convert.ipynb",
-    "image_dataset"
+    "02 model convert.ipynb"
 )
 
 if (-not $SkipDataset0424) {

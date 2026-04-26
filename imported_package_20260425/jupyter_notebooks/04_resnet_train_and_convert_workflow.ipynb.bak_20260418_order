@@ -1,0 +1,348 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "# ResNet18 XY Training + Bin Convert Workflow\n",
+        "\n",
+        "这个 notebook 适用于当前服务器的 `10_model_convert/mapper/image_dataset` 数据集。\n",
+        "它会把“训练 -> 导出 ONNX -> Horizon bin 转换”串成一条完整链路。\n",
+        "\n",
+        "当前数据集的标签来自文件名，例如：`xy_025_474_xxx.jpg`。\n",
+        "这里把 `x,y` 当作两个连续值做回归，而不是分类。\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "from pathlib import Path\n",
+        "import json\n",
+        "import re\n",
+        "import shlex\n",
+        "import subprocess\n",
+        "from statistics import mean, pstdev\n",
+        "\n",
+        "NOTEBOOK_ROOT = Path('/home/ubuntu/jupyter_notebooks')\n",
+        "WORKDIR = Path('/home/ubuntu/10_model_convert')\n",
+        "DATA_DIR = WORKDIR / 'mapper' / 'image_dataset'\n",
+        "TRAIN_SCRIPT = WORKDIR / 'train_resnet_xy.py'\n",
+        "EXPORT_SCRIPT = WORKDIR / 'export_resnet_xy_to_onnx.py'\n",
+        "PTH_FILE = Path('/home/ubuntu/best_line_follower_model_xy.pth')\n",
+        "STATS_FILE = WORKDIR / 'label_stats_xy.json'\n",
+        "SUMMARY_FILE = WORKDIR / 'training_summary_xy.json'\n",
+        "SPLIT_FILE = WORKDIR / 'train_split_xy.json'\n",
+        "OE_ROOT = Path('/home/ubuntu/horizon_x5_open_explorer_v1.2.8-py310_20240926')\n",
+        "SAMPLE_ROOT = OE_ROOT / 'samples/ai_toolchain/horizon_model_convert_sample/03_classification'\n",
+        "WORK_NAME = '10_model_convert'\n",
+        "MAPPER_DIR = SAMPLE_ROOT / WORK_NAME / 'mapper'\n",
+        "ONNX_FILE = 'best_line_follower_model_xy.onnx'\n",
+        "CONFIG_FILE = 'resnet18_config.yaml'\n",
+        "DOCKER_IMAGE = 'openexplorer/ai_toolchain_ubuntu_20_x5_cpu:v1.2.8-py310'\n",
+        "MARCH = 'bayes-e'\n",
+        "\n",
+        "IMAGE_SIZE = 224\n",
+        "EPOCHS = 60\n",
+        "BATCH_SIZE = 32\n",
+        "WORKERS = 8\n",
+        "LR = 1e-3\n",
+        "WEIGHT_DECAY = 1e-4\n",
+        "VAL_RATIO = 0.2\n",
+        "SEED = 42\n",
+        "USE_PRETRAINED = True\n",
+        "DEVICE = 'cuda'\n",
+        "\n",
+        "print('WORKDIR =', WORKDIR)\n",
+        "print('DATA_DIR =', DATA_DIR)\n",
+        "\n",
+        "\n",
+        "def run(cmd: str):\n",
+        "    print(f'\\n$ {cmd}\\n')\n",
+        "    completed = subprocess.run(cmd, shell=True, executable='/bin/bash', text=True, capture_output=True)\n",
+        "    if completed.stdout:\n",
+        "        print(completed.stdout)\n",
+        "    if completed.stderr:\n",
+        "        print(completed.stderr)\n",
+        "    if completed.returncode != 0:\n",
+        "        raise RuntimeError(f'Command failed with exit code {completed.returncode}')\n",
+        "    return completed\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 1. 环境和数据集检查\n",
+        "\n",
+        "这里先确认：\n",
+        "- `yolo11` 环境里有 PyTorch / ONNX\n",
+        "- 数据集文件名可以正确解析出 `x,y`\n",
+        "- 当前数据量、标签范围都符合预期\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "assert WORKDIR.exists(), f'WORKDIR not found: {WORKDIR}'\n",
+        "assert DATA_DIR.exists(), f'DATA_DIR not found: {DATA_DIR}'\n",
+        "assert TRAIN_SCRIPT.exists(), f'TRAIN_SCRIPT not found: {TRAIN_SCRIPT}'\n",
+        "assert EXPORT_SCRIPT.exists(), f'EXPORT_SCRIPT not found: {EXPORT_SCRIPT}'\n",
+        "\n",
+        "run('source ~/miniconda3/etc/profile.d/conda.sh && conda run -n yolo11 python -c \"import torch, torchvision, onnx; print(torch.__version__); print(torch.cuda.is_available()); print(torchvision.__version__); print(onnx.__version__)\"')\n",
+        "\n",
+        "pattern = re.compile(r'^xy_(\\d+)_(\\d+)_')\n",
+        "files = sorted(DATA_DIR.glob('*.jpg'))\n",
+        "assert files, f'No jpg files found in {DATA_DIR}'\n",
+        "xs = []\n",
+        "ys = []\n",
+        "for path in files:\n",
+        "    match = pattern.match(path.name)\n",
+        "    assert match, f'Unexpected filename: {path.name}'\n",
+        "    xs.append(int(match.group(1)))\n",
+        "    ys.append(int(match.group(2)))\n",
+        "\n",
+        "print('image_count =', len(files))\n",
+        "print('x range     =', min(xs), '->', max(xs), '| mean =', round(mean(xs), 2), '| std =', round(pstdev(xs), 2))\n",
+        "print('y range     =', min(ys), '->', max(ys), '| mean =', round(mean(ys), 2), '| std =', round(pstdev(ys), 2))\n",
+        "print('sample files =')\n",
+        "for path in files[:5]:\n",
+        "    print(' -', path.name)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 2. 启动训练\n",
+        "\n",
+        "训练脚本会做这些事情：\n",
+        "- 从 `xy_<x>_<y>_*.jpg` 文件名里解析标签\n",
+        "- 按固定随机种子切分 train/val\n",
+        "- 用 `resnet18(fc=2)` 做回归训练\n",
+        "- 对标签做显式标准化，并把统计量保存到 `label_stats_xy.json`\n",
+        "- 保存最佳权重到 `/home/ubuntu/best_line_follower_model_xy.pth`\n",
+        "\n",
+        "说明：导出 ONNX 时会把输出反标准化回原始 `x,y` 数值，所以最终 ONNX/bin 的输出仍然是原始坐标尺度。\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "pretrained_flag = '--pretrained' if USE_PRETRAINED else ''\n",
+        "cmd = (\n",
+        "    'source ~/miniconda3/etc/profile.d/conda.sh && '\n",
+        "    f'conda run -n yolo11 python {shlex.quote(str(TRAIN_SCRIPT))} '\n",
+        "    f'--dataset-dir {shlex.quote(str(DATA_DIR))} '\n",
+        "    f'--output-pth {shlex.quote(str(PTH_FILE))} '\n",
+        "    f'--stats-file {shlex.quote(str(STATS_FILE))} '\n",
+        "    f'--summary-file {shlex.quote(str(SUMMARY_FILE))} '\n",
+        "    f'--split-file {shlex.quote(str(SPLIT_FILE))} '\n",
+        "    f'--epochs {EPOCHS} --batch-size {BATCH_SIZE} --workers {WORKERS} '\n",
+        "    f'--lr {LR} --weight-decay {WEIGHT_DECAY} --val-ratio {VAL_RATIO} '\n",
+        "    f'--image-size {IMAGE_SIZE} --seed {SEED} --device {DEVICE} {pretrained_flag}'\n",
+        ")\n",
+        "run(cmd)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 3. 查看训练产物\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "assert PTH_FILE.exists(), f'Checkpoint not found: {PTH_FILE}'\n",
+        "assert STATS_FILE.exists(), f'Stats file not found: {STATS_FILE}'\n",
+        "assert SUMMARY_FILE.exists(), f'Summary file not found: {SUMMARY_FILE}'\n",
+        "assert SPLIT_FILE.exists(), f'Split file not found: {SPLIT_FILE}'\n",
+        "\n",
+        "stats = json.loads(STATS_FILE.read_text(encoding='utf-8'))\n",
+        "summary = json.loads(SUMMARY_FILE.read_text(encoding='utf-8'))\n",
+        "\n",
+        "print('checkpoint =', PTH_FILE)\n",
+        "print('stats      =', STATS_FILE)\n",
+        "print('summary    =', SUMMARY_FILE)\n",
+        "print('best epoch =', summary['best_epoch'])\n",
+        "print('best loss  =', round(summary['best_val_loss'], 6))\n",
+        "if summary.get('history'):\n",
+        "    last = summary['history'][-1]\n",
+        "    print('last epoch =', last['epoch'])\n",
+        "    print('last val MAE =', round(last['val_mae_x'], 2), round(last['val_mae_y'], 2))\n",
+        "print('label mean =', stats['label_mean'])\n",
+        "print('label std  =', stats['label_std'])\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 4. 导出 ONNX\n",
+        "\n",
+        "导出脚本会读取训练得到的 `label_stats_xy.json`，\n",
+        "把模型输出从“标准化坐标”恢复成“原始坐标”，再写成 ONNX。\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "cmd = (\n",
+        "    'source ~/miniconda3/etc/profile.d/conda.sh && '\n",
+        "    f'conda run -n yolo11 python {shlex.quote(str(EXPORT_SCRIPT))} '\n",
+        "    f'--pth {shlex.quote(str(PTH_FILE))} '\n",
+        "    f'--stats-file {shlex.quote(str(STATS_FILE))} '\n",
+        "    f'--onnx-out {shlex.quote(str(WORKDIR / \"mapper\" / ONNX_FILE))} '\n",
+        "    f'--image-size {IMAGE_SIZE}'\n",
+        ")\n",
+        "run(cmd)\n",
+        "assert (WORKDIR / 'mapper' / ONNX_FILE).exists(), f'ONNX not found: {WORKDIR / \"mapper\" / ONNX_FILE}'\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 5. 同步到 Open Explorer sample 目录\n",
+        "\n",
+        "这里继续复用你服务器上已有的 Horizon 转换流程。\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "assert OE_ROOT.exists(), f'OE_ROOT not found: {OE_ROOT}'\n",
+        "assert SAMPLE_ROOT.exists(), f'SAMPLE_ROOT not found: {SAMPLE_ROOT}'\n",
+        "\n",
+        "dst_work = SAMPLE_ROOT / WORK_NAME\n",
+        "run(f'sudo rm -rf {shlex.quote(str(dst_work))}')\n",
+        "run(f'cp -a {shlex.quote(str(WORKDIR))} {shlex.quote(str(SAMPLE_ROOT))}')\n",
+        "run(f'sudo chown -R ubuntu:ubuntu {shlex.quote(str(dst_work))}')\n",
+        "\n",
+        "assert MAPPER_DIR.exists(), f'MAPPER_DIR not found: {MAPPER_DIR}'\n",
+        "assert (MAPPER_DIR / CONFIG_FILE).exists(), f'Config not found: {MAPPER_DIR / CONFIG_FILE}'\n",
+        "assert (MAPPER_DIR / ONNX_FILE).exists(), f'ONNX not found: {MAPPER_DIR / ONNX_FILE}'\n",
+        "assert (MAPPER_DIR / 'image_dataset').exists(), f'image_dataset not found: {MAPPER_DIR / \"image_dataset\"}'\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 6. 生成校准数据 + checker\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "cmd = f\"sudo docker run --rm -v {OE_ROOT}:/open_explorer {DOCKER_IMAGE} bash -lc 'cd /open_explorer/samples/ai_toolchain/horizon_model_convert_sample/03_classification/{WORK_NAME}/mapper && rm -rf calibration_data_bgr_f32 && bash 02_preprocess.sh'\"\n",
+        "run(cmd)\n",
+        "print('calibration files =', len(list((MAPPER_DIR / 'calibration_data_bgr_f32').glob('*.rgb'))))\n",
+        "\n",
+        "cmd = f\"sudo docker run --rm -v {OE_ROOT}:/open_explorer {DOCKER_IMAGE} bash -lc 'cd /open_explorer/samples/ai_toolchain/horizon_model_convert_sample/03_classification/{WORK_NAME}/mapper && hb_mapper checker --model-type onnx --model ./{ONNX_FILE} --march {MARCH}'\"\n",
+        "run(cmd)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 7. 生成 bin\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "cmd = f\"sudo docker run --rm -v {OE_ROOT}:/open_explorer {DOCKER_IMAGE} bash -lc 'cd /open_explorer/samples/ai_toolchain/horizon_model_convert_sample/03_classification/{WORK_NAME}/mapper && bash 03_build.sh'\"\n",
+        "run(cmd)\n",
+        "run(f\"sudo chown -R ubuntu:ubuntu {shlex.quote(str(SAMPLE_ROOT / WORK_NAME))}\")\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 8. 查看转换产物\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "from datetime import datetime\n",
+        "import shutil\n",
+        "\n",
+        "output_dir = MAPPER_DIR / 'model_output'\n",
+        "assert output_dir.exists(), f'model_output not found: {output_dir}'\n",
+        "for path in sorted(output_dir.iterdir()):\n",
+        "    print(' -', path.name, f'({path.stat().st_size / 1024 / 1024:.2f} MB)')\n",
+        "\n",
+        "bin_candidates = sorted(output_dir.glob('*.bin'))\n",
+        "assert bin_candidates, f'No .bin file found in: {output_dir}'\n",
+        "bin_file = bin_candidates[0]\n",
+        "\n",
+        "easy_bin = Path('/home/ubuntu/model_latest.bin')\n",
+        "shutil.copy2(bin_file, easy_bin)\n",
+        "\n",
+        "stamp = datetime.now().strftime('%Y%m%d_%H%M%S')\n",
+        "stamped = Path(f'/home/ubuntu/{bin_file.stem}_{stamp}.bin')\n",
+        "shutil.copy2(bin_file, stamped)\n",
+        "\n",
+        "print('copied from:', bin_file)\n",
+        "print('copied to  :', easy_bin)\n",
+        "print('copied to  :', stamped)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 9. 备注\n",
+        "\n",
+        "- 当前 `10_model_convert/mapper/postprocess.py` 还是分类样例，不适合直接解释这个 XY 回归模型的输出。\n",
+        "- 这个 notebook 已经保证导出的 ONNX/bin 输出是**原始坐标尺度**，不是标准化值。\n",
+        "- 如果后面你要做“板端推理结果可视化”，建议再单独补一个针对 `x,y` 的后处理脚本。\n"
+      ]
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "display_name": "Python 3 (ipykernel)",
+      "language": "python",
+      "name": "python3"
+    },
+    "language_info": {
+      "name": "python",
+      "version": "3.10.12"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}
