@@ -1,10 +1,11 @@
 param(
     [string]$HostName = "140.207.205.81",
     [int]$Port = 32222,
-    [string]$User = "root+vm-YQnvEygTr4uscqw7",
-    [string]$RemoteDir = "~/originbot",
+    [string]$User = "root+vm-B46pSyUOwTzQlMW3",
+    [string]$RemoteDir = "/data/originbot",
     [switch]$SkipImageDataset,
     [switch]$SkipDataset0424,
+    [switch]$SkipWeights,
     [switch]$KeepBundle
 )
 
@@ -29,18 +30,13 @@ if (-not $repoRoot) {
 Set-Location $repoRoot
 
 $items = @(
-    ".gitignore",
     "README.md",
     "originbot_train.py",
     "originbot_onnx.py",
-    "originbot_test.py",
-    "originbot_data.py",
-    "originbot_video.py",
     "prepare_horizon_mapper.py",
     "horizon_preprocess.py",
     "run_horizon_convert.sh",
     "setup_jupyter_autostart.sh",
-    "setup_train113.sh",
     "02_preprocess.sh",
     "03_build.sh",
     "resnet18_224x224_nv12.yaml",
@@ -56,6 +52,10 @@ if (-not $SkipDataset0424) {
     $items += "image_dataset_0424"
 }
 
+if ((-not $SkipWeights) -and (Test-Path -LiteralPath "best_line_follower_model_xy.pth")) {
+    $items += "best_line_follower_model_xy.pth"
+}
+
 $missing = @()
 foreach ($item in $items) {
     if (-not (Test-Path -LiteralPath $item)) {
@@ -67,26 +67,39 @@ if ($missing.Count -gt 0) {
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$bundleName = "originbot_bundle_$timestamp.tgz"
+$bundleName = "originbot_upload_$timestamp.tgz"
 $bundlePath = Join-Path $repoRoot $bundleName
 $remote = "$User@$HostName"
 
 Write-Host "[1/4] Creating bundle: $bundlePath"
 & tar -czf $bundlePath @items
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to create bundle."
+}
 
 Write-Host "[2/4] Ensuring remote dir: $RemoteDir"
 & ssh -p $Port $remote "mkdir -p '$RemoteDir'"
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to create remote directory: $RemoteDir"
+}
 
 Write-Host "[3/4] Uploading bundle to remote /tmp"
 & scp -P $Port $bundlePath "${remote}:/tmp/$bundleName"
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to upload bundle."
+}
 
 Write-Host "[4/4] Extracting bundle on remote and setting execute bits"
 $extractCmd = @"
+mkdir -p '$RemoteDir' && \
 tar -xzf /tmp/$bundleName -C '$RemoteDir' && \
-chmod +x '$RemoteDir/run_horizon_convert.sh' '$RemoteDir/setup_jupyter_autostart.sh' '$RemoteDir/setup_train113.sh' '$RemoteDir/02_preprocess.sh' '$RemoteDir/03_build.sh' && \
+chmod +x '$RemoteDir/run_horizon_convert.sh' '$RemoteDir/setup_jupyter_autostart.sh' '$RemoteDir/02_preprocess.sh' '$RemoteDir/03_build.sh' && \
 rm -f /tmp/$bundleName
 "@
 & ssh -p $Port $remote $extractCmd
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to extract bundle on remote host."
+}
 
 if (-not $KeepBundle) {
     Remove-Item -LiteralPath $bundlePath -Force

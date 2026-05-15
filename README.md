@@ -11,7 +11,7 @@ This repository provides a full workflow for:
 - `originbot_train.py`: training script (`best_line_follower_model_xy.pth`)
 - `originbot_onnx.py`: export `.pth` to `.onnx`
 - `01 train.ipynb`: training notebook
-- `02 model convert.ipynb`: conversion notebook (default mapper: `/root/originbot`)
+- `02 model convert.ipynb`: Docker/OpenExplorer conversion notebook (Jupyter under `/data` friendly)
 - `setup_train113.sh`: environment bootstrap (Miniconda + pinned deps)
 - `setup_jupyter_autostart.sh`: Jupyter launcher (`MODE=auto/systemd/nohup`)
 - `prepare_horizon_mapper.py`: mapper preparation helper
@@ -34,7 +34,7 @@ For A16 + older driver stacks:
 Run on server (prefer root):
 
 ```bash
-cd /root/originbot
+cd /data/originbot
 chmod +x setup_train113.sh
 ENV_NAME=train113 CONDA_DIR=/root/miniconda3 bash setup_train113.sh
 source /root/miniconda3/etc/profile.d/conda.sh
@@ -47,8 +47,8 @@ Multi-dataset training example:
 
 ```bash
 python originbot_train.py \
-  --dataset-dir /root/originbot/image_dataset \
-  --dataset-dir /root/originbot/image_dataset_0424 \
+  --dataset-dir /data/originbot/image_dataset \
+  --dataset-dir /data/originbot/image_dataset_0424 \
   --epochs 100 \
   --batch-size 128 \
   --num-workers 3 \
@@ -72,8 +72,8 @@ Output:
 If no `systemd`, use `nohup` mode:
 
 ```bash
-cd /root/originbot
-MODE=nohup JUPYTER_PORT=8888 JUPYTER_TOKEN='your_token_here' PROJECT_DIR=/root/originbot bash setup_jupyter_autostart.sh
+cd /data/originbot
+MODE=nohup JUPYTER_PORT=8888 JUPYTER_TOKEN='your_token_here' PROJECT_DIR=/data/originbot bash setup_jupyter_autostart.sh
 ```
 
 Local tunnel:
@@ -87,32 +87,34 @@ Open:
 
 ## 4) Convert ONNX to BIN
 
-`hb_mapper` must be available in current environment:
-
-```bash
-which hb_mapper
-hb_mapper --help
-```
-
 Notebook path (recommended):
 - Run `02 model convert.ipynb`.
-- Default mapper workspace: `/root/originbot`.
-- Optional override:
+- The notebook now detects the current project directory automatically, which fits Jupyter roots like `/data`.
+- It copies required files into an OpenExplorer sample workspace and runs `hb_mapper` inside Docker.
+- Optional overrides:
   ```bash
-  export MAPPER_DIR=/your/mapper/path
+  export PROJECT_DIR=/data/originbot
+  export OPEN_EXPLORER_ROOT=/data/horizon_x5_open_explorer_v1.2.8-py310_20240926
+  export WORK_NAME=originbot_convert
+  export DOCKER_IMAGE=openexplorer/ai_toolchain_ubuntu_20_x5_cpu:v1.2.8-py310
   ```
 
 CLI path:
 
 ```bash
-cd /root/originbot
-python prepare_horizon_mapper.py --mapper-dir /root/originbot --onnx /root/originbot/best_line_follower_model_xy.onnx --dataset-dir /root/originbot/image_dataset
-bash run_horizon_convert.sh /root/originbot
-ls -lh /root/originbot/model_output/*.bin
+cd /data/originbot
+python prepare_horizon_mapper.py --mapper-dir /data/originbot --onnx /data/originbot/best_line_follower_model_xy.onnx --dataset-dir /data/originbot/image_dataset
+bash run_horizon_convert.sh /data/originbot
+ls -lh /data/originbot/model_output/*.bin
 ```
+
+CLI note:
+- `run_horizon_convert.sh` still assumes `hb_mapper` is already available in the current shell.
+- If your current runtime image does not provide `hb_mapper`, use `02 model convert.ipynb` instead.
 
 Note:
 - `image_dataset_0424` is useful for training, but not required for `.bin` conversion.
+- If your current runtime image is `cv-cuda+pytorch2.4+python3.10`, training and ONNX export scripts are compatible; `setup_train113.sh` is only for the older pinned `torch1.12` environment.
 
 ## 5) Upload from Windows (PowerShell)
 
