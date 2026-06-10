@@ -1,0 +1,332 @@
+1，数据采集和标注
+1.1，准备
+1.1.1	启动小车摄像头
+
+命令：
+
+ros2 launch originbot_bringup camera.launch.py
+
+1.2，采集图像程序
+1.2.1	启动图像采集程序
+命令：
+
+cd /userdate/
+python picker_pic.py
+
+1.3，采集图像数据
+	按回车采集
+	按ctr+c中止程序
+	图像保存在/userdata/pictures/img
+
+二，数据标注（参考 https://blog.csdn.net/didiaopao/article/details/119808973）
+
+1，准备
+	生成python3.9环境，打开在 Anaconda Prompt，运行：
+命令：
+
+conda create -n labelimg python=3.9 -y
+
+注意：需要1.5g左右
+
+
+
+	激活labelimg环境
+命令：
+
+conda activate labelimg
+
+	安装标注软件labelimg
+命令：
+
+pip install labelimg -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+	新建VOC2007文件夹
+命令：
+
+mkdir VOC2007
+
+	在 VOC2007 目录下，新建 JPEGImages 和 Annotations 两个文件夹
+命令：
+
+mkdir JPEGImages Annotations
+
+	在VOC2007目录下，新建predefined_classes.txt文件
+（需要在电脑里找到voc2007文件夹，进行新建，在txt文件内添加类别，例如：
+green_light
+yellow_light
+red_light)
+
+2，标注图像
+	进入voc2007
+命令：
+
+cd VOC2007
+
+	运行标注程序
+命令：
+
+labelimg JPEGImages predefined_classes.txt
+
+	选择yolo模式，设置view中		auto save mode----display labels----Show/hide labels panel----advanced mode
+	点击File，选择Change save dir
+
+	按“W”调出照片，并使用鼠标标注，选择符合实际的类型(G/Y/R)
+
+	Annotations 文件下看到标签文件已经保存在这个目录下，文件数是图片数+1（多了一个 classes.txt 文件）
+
+	标注结束后，退出labelimg环境
+命令
+
+conda deactivate
+
+
+
+二，模型训练
+
+
+3，环境准备
+	下载 ultralytics/ultralytics 仓库，并安装相应环境和依赖。
+命令：
+
+git clone https://github.com/ultralytics/ultralytics.git
+
+	进入ultralytics库，下载官方的预训练权重（260 万参数的 YOLO11n-Detect 模型）（注意，计算机上没有安装 wget 程序，直接拷贝 yolo11n.pt 到 ultralytics 目录下）
+命令：
+
+cd ultralytics
+
+wget https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt
+
+重要		建立 yolo11 的环境，python 设置为 3.10 版本（重要）
+命令：
+
+conda create -n yolo11 python=3.10 -y
+
+	激活yolo11环境
+命令：
+
+conda activate yolo11
+
+	安装依赖（使用独显，or cpu）
+命令：
+独显：
+conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y
+
+or
+cpu：
+conda install pytorch torchvision torchaudio -y
+
+重要：	安装onnx 和 ultralytics（重要）
+命令：
+
+pip install onnx==1.18.0 onnxslim onnxruntime -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install ultralytics -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+	验证安装情况（多次使用情况下，可省略）
+	从网上任意下载一张图片，放在 ultralytics 目录下，修改名字：任意（比如：bus）
+命令：
+
+yolo predict model=yolo11n.pt source='bus.jpg'
+
+	根据save to 地址，打开图片查看推理结果
+
+
+
+4，数据分割，分成训练集，验证集，测试集（8：1：1）把pic_seg.py 拷贝到 ultralytics 目录下，并修改pic_seg.py里的数据保存绝对路径：
+
+重要	如图：（重要）
+	运行pic_seg.py
+命令：
+
+python pic_seg.py
+
+结果：在 ultralytics 下，生成 traffices 文件夹，下面有三个子目录
+
+重要：		拷贝 ultralytics\ultralytics\cfg\models\11\下的 yolo11.yaml 到ultralytics 目录下，并改名 myyolo11n.yaml
+
+	打开 myyolo11n.yaml，把 nc:80，改为 3（根据predefined_classes.txt文件内的类型数量），并存盘退出。
+
+重要：	将 mydata.yaml复制在 ultralytics 文件夹下
+重要：	打开mydata.yaml，修改三个样本集合的路径：
+
+.\ultralytics\traffices\train\images
+.\ultralytics\traffices\val\images
+.\ultralytics\traffices\test\images
+
+重要：	启动训练
+命令：
+
+yolo task=detect mode=train model=myyolo11n.yaml pretrained=yolo11n.pt data=mydata.yaml epochs=300 imgsz=640 device=0 optimizer='SGD' workers=8 batch=16 amp=True cache=False lr0=0.01
+
+参数含义：
+data='mydata.yaml', #数据集配置文件的路径
+epochs=300, #训练轮次总数
+batch=16, #批量大小，即单次输入多少图片训练
+imgsz=640, #训练图像尺寸
+workers=8, #加载数据的工作线程数
+device= 0, #指定训练的计算设备，无 nvidia 显卡则改为 'cpu'
+optimizer='auto', #训练使用优化器，可选 auto,SGD,Adam,AdamW 等
+amp= True, #True 或者 False, 解释为：自动混合精度(AMP) 训练
+cache=False # True 在内存中缓存数据集图像，服务器推荐开启
+
+重要：	根据save to地址查看训练结果文件：ultralytics\runs\detect\train\weights\best.pt
+
+	检验结果，weights/best.pt 拷贝到 ultralytics 目录下
+	验证模型
+命令：
+
+yolo predict model=best.pt source='./traffices/test/images'
+
+	根据save to地址查看验证结果文件：ultralytics\runs\detect\predect
+
+
+
+5，转换onnx文件
+
+	关闭yolo11
+命令：
+
+conda deactivate
+
+显示，前缀为base
+
+重要：	修改 ultralytics/ultralytics/nn/modules/block.py
+
+1308行
+
+a	把原来的 def forward(self, x: torch.Tensor)，改成 def forward_(self, x: torch.Tensor)
+操作：在forward后面加一个“_”
+b	新增 forward函数
+操作：在原来forward_函数return 后，另启一行
+
+粘贴：
+######
+	def forward(self, x: torch.Tensor) -> torch.Tensor: 
+		print(f"{x.shape = }") 
+		B, C, H, W = x.shape 
+		N = H * W 
+		qkv = self.qkv(x) 
+		q, k, v = qkv.view(B, self.num_heads, self.key_dim * 2 + self.head_dim,N).split([self.key_dim, self.key_dim, self.head_dim], dim=2) 
+		attn = (q.transpose(-2, -1) @ k) * self.scale 
+		attn = attn.permute(0, 3, 1, 2).contiguous() # CHW2HWC like
+		max_attn = attn.max(dim=1, keepdim=True).values 
+		exp_attn = torch.exp(attn - max_attn) 
+		sum_attn = exp_attn.sum(dim=1, keepdim=True) 
+		attn = exp_attn / sum_attn 
+		attn = attn.permute(0, 2, 3, 1).contiguous() # HWC2CHW like
+		x = (v @ attn.transpose(-2, -1)).view(B, C, H, W) + self.pe(v.reshape(B, C, H, W))
+		x = self.proj(x) 
+		return x
+######
+重要：	或者把更新后的block.py覆盖在ultralytics/ultralytics/nn/modules/下
+
+重要：	修改 ultralytics/ultralytics/nn/modules/head.py
+
+141行
+
+a	把原来的   def forward(self,x:list[torch.Tensor]) -> list[torch.Tensor] | tuple:    改成    def forward_(self,x:list[torch.Tensor]) -> list[torch.Tensor] | tuple:
+操作：在forward后面加一个“_”
+b	新增 forward函数
+
+粘贴：
+#####
+	def forward(self, x: list[torch.Tensor]) -> list[torch.Tensor] | tuple:
+		result = [] 
+		for i in range(self.nl): 
+		result.append(self.cv3[i](x[i]).permute(0, 2, 3, 1).contiguous()) 
+		result.append(self.cv2[i](x[i]).permute(0, 2, 3, 1).contiguous()) 
+		return result	
+#####	
+
+注意注意注意：
+
+***************模型训练或推理时，这两处修改要换回来************
+
+注意注意注意：
+
+	回到python界面
+命令：
+
+python
+
+	在python界面安装yolo		（注意：：：：需要确认python版本，3.10.9）
+
+重要：如果不是，需要回到上面，重新安装python3.10.9版本
+
+命令：
+
+from ultralytics import YOLO
+
+命令：
+
+YOLO('best.pt').export(imgsz=640, format='onnx', simplify=True, opset=11)exit()
+
+结果：	在 ultralytics 目录下，生成 best.onnx 模型
+
+
+
+
+6，转换bin文件
+（前置：需要将originbot-5虚拟文件下载到本地，33g多）
+操作：	使用VMware打开originbot虚拟机器
+操作：	horizon_x5_open_explorer_v1.2.8-py310_20240926 目录下，新建一个文件夹yolo11
+操作：	把          best.onnx、                 generate_calibration_data.py、                 yolo11_detect_bayese_640x640_nv12.yaml                     和               标注图片的 JPEGImages 文件夹                一起拷贝，黏贴到 yolo11 目录下
+操作：	alt+ctrl+t		打开终端
+命令：
+
+cd horizon_x5_open_explorer_v1.2.8-py310_20240926/
+
+命令：
+
+sudo bash run_docker.sh /data cpu
+
+
+操作：	输入密码：ros
+
+	进入 yolo11 目录，生成校验图片
+命令：
+cd yolo11
+
+命令：
+python3 generate_calibration_data.py --src JPEGImages/
+
+	检验模型
+命令：
+hb_mapper checker --model-type onnx --march bayes-e --model best.onnx
+
+	检验通过后，生成bin文件
+命令：
+hb_mapper makertbin --model-type onnx --config yolo11_detect_bayese_640x640_nv12.yaml
+
+结果：在 model_output 下生成 yolo11n_detect_bayese_640x640_nv12.bin
+
+	检查模型
+命令：
+cd model_output
+命令：
+hb_perf yolo11n_detect_bayese_640x640_nv12.bin
+
+	在 model_output/hb_perf_result/yolo11n_detect_bayese_640x640_nv12 目录下查看模型
+操作：打开在 model_output/hb_perf_result/yolo11n_detect_bayese_640x640_nv12 目录下的jpg文件
+
+	优化模型
+命令：
+
+hb_model_modifier yolo11n_detect_bayese_640x640_nv12.bin \-r /model.23/cv2.0/cv2.0.2/Conv_output_0_HzDequantize \-r /model.23/cv2.1/cv2.1.2/Conv_output_0_HzDequantize \-r /model.23/cv2.2/cv2.2.2/Conv_output_0_HzDequantize
+
+结果：	在 model_output 目录下生成yolo11n_detect_bayese_640x640_nv12_modified.bin
+
+	检查优化模型
+命令：
+hb_perf yolo11n_detect_bayese_640x640_nv12_modified.bin
+
+操作：	在model_output/hb_perf_result/yolo11n_detect_bayese_640x640_nv12_modified目录下的jpg文件观察
+
+
+重要：和实验指导书对照
+
+	导出bin文件到本地
+操作：复制yolo11n_detect_bayese_640x640_nv12_modified.bin，粘贴到本地ultralytics文件内
+
+
+
